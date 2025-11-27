@@ -1,0 +1,18 @@
+# G1 Robot Controller - Python Dependencies
+# Install with: pip install -r requirements.txt
+
+# Core Unitree SDK for G1 robot communication
+unitree-sdk2py>=1.0.0
+
+# Computer Vision
+opencv-python>=4.8.0
+
+# Optional: For advanced image processing
+# numpy>=1.24.0  # Usually included with opencv-python
+
+# Development Dependencies (optional)
+# pytest>=7.4.0           # For unit testing
+# pytest-cov>=4.1.0       # For coverage reports
+# black>=23.0.0           # Code formatting
+# flake8>=6.0.0           # Linting
+# mypy>=1.5.0             # Type checking
