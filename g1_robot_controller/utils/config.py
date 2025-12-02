@@ -13,17 +13,17 @@ config.py - 配置模块
 
 配置分类:
     - NETWORK: 网络和ROS2频道配置
-    - CAMERA: 摄像头参数（设备号、分辨率等）
+    - CAMERA: RealSense D435i摄像头参数（设备序列号、分辨率等）
     - AUDIO: TTS和ASR的音频配置
     - THOR: Jetson Thor服务器通信配置
     - SYSTEM: 系统级配置（调试、日志级别等）
 
 环境变量参考:
     G1_NET_IF: 网络接口名称（默认 eth0）
-    G1_CAMERA_DEVICE: 摄像头设备号（默认 4，即 /dev/video4）
+    G1_REALSENSE_SN: RealSense设备序列号（默认 233722074381）
     G1_CAMERA_WIDTH: 图像宽度（默认 640）
     G1_CAMERA_HEIGHT: 图像高度（默认 480）
-    G1_CAMERA_FPS: 摄像头帧率（默认 30）
+    G1_CAMERA_FPS: 摄像头帧率（默认 15，RealSense推荐值）
     G1_SPEAKER: TTS语言（默认 1=英文，0=中文）
     G1_TTS_TIMEOUT: TTS超时时间（默认 10.0秒）
     G1_ASR_TOPIC: ASR话题名称（默认 "rt/audio_msg"）
@@ -59,11 +59,10 @@ import sys
 NETWORK_INTERFACE = os.getenv("G1_NET_IF", "eth0")
 
 # ============================================================
-# 摄像头配置
+# 摄像头配置（Intel RealSense D435i）
 # ============================================================
-# 摄像头设备号（整数）
-# /dev/videoN 中的N值，4表示/dev/video4
-CAMERA_DEVICE = int(os.getenv("G1_CAMERA_DEVICE", "4"))
+# RealSense设备序列号（G1头顶D435i）
+REALSENSE_DEVICE_SN = os.getenv("G1_REALSENSE_SN", "233722074381")
 
 # 图像分辨率：宽度（像素）
 CAMERA_WIDTH = int(os.getenv("G1_CAMERA_WIDTH", "640"))
@@ -72,7 +71,11 @@ CAMERA_WIDTH = int(os.getenv("G1_CAMERA_WIDTH", "640"))
 CAMERA_HEIGHT = int(os.getenv("G1_CAMERA_HEIGHT", "480"))
 
 # 摄像头帧率（每秒帧数）
-CAMERA_FPS = int(os.getenv("G1_CAMERA_FPS", "30"))
+# RealSense D435i推荐使用15fps以确保所有设备兼容
+CAMERA_FPS = int(os.getenv("G1_CAMERA_FPS", "15"))
+
+# 保留旧的CAMERA_DEVICE配置用于兼容性（已弃用）
+CAMERA_DEVICE = int(os.getenv("G1_CAMERA_DEVICE", "4"))
 
 # ============================================================
 # 音频和文本转语音（TTS）配置

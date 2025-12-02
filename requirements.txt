@@ -7,8 +7,11 @@ unitree-sdk2py>=1.0.0
 # Computer Vision
 opencv-python>=4.8.0
 
-# Optional: For advanced image processing
-# numpy>=1.24.0  # Usually included with opencv-python
+# Intel RealSense D435i Camera Support
+pyrealsense2>=2.50.0
+
+# Numerical Computing (required by RealSense)
+numpy>=1.24.0
 
 # Development Dependencies (optional)
 # pytest>=7.4.0           # For unit testing

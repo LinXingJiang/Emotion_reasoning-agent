@@ -1,37 +1,40 @@
 """
-camera_reader.py - 摄像头读取器
+camera_reader.py - 摄像头读取器（RealSense D435i）
 
 功能说明:
-    这个模块负责从G1机器人的前置摄像头捕获图像。
-    使用OpenCV库进行摄像头操作，支持自动保存图像。
+    这个模块负责从G1机器人头顶的Intel RealSense D435i深度摄像头捕获图像。
+    使用pyrealsense2库进行摄像头操作，支持彩色图和深度图。
 
 主要特性:
-    1. 图像捕获 - 支持单帧捕获
+    1. 图像捕获 - 支持彩色图和深度图
     2. 资源管理 - 每次捕获后自动释放摄像头资源，避免资源冲突
-    3. 配置灵活 - 支持自定义摄像头设备、分辨率等
+    3. 硬件识别 - 通过设备序列号锁定指定D435i摄像头
     4. 错误处理 - 完善的异常处理和日志记录
 
 数据流:
-    打开摄像头 → 设置分辨率 → 读取一帧
+    启动pipeline → 配置流 → 等待帧
         ↓
-    图像处理/保存 → 释放摄像头资源
+    获取彩色图/深度图 → 保存 → 停止pipeline
 
 资源管理说明:
-    - 为避免资源竞争，每次capture()都会打开和关闭摄像头
+    - 为避免资源竞争，每次capture()都会启动和停止pipeline
     - 适合周期性拍照的应用场景
     - 不适合持续视频流处理
 
 使用例子:
     reader = CameraReader()
-    image, path = reader.capture()  # 拍一张照片
+    image, path = reader.capture()  # 拍一张照片（仅彩色）
     reader.capture_and_save("photo.jpg")  # 拍照并保存
 """
 
 import os
 import logging
+import time
 from typing import Optional
 
 import cv2
+import numpy as np
+import pyrealsense2 as rs
 
 from ..utils import config
 
@@ -40,25 +43,26 @@ logger = logging.getLogger(__name__)
 
 class CameraReader:
     """
-    摄像头读取器 - 从G1机器人前置摄像头捕获图像
+    摄像头读取器 - 从G1机器人头顶RealSense D435i捕获图像
     
     主要功能:
-        1. 连接到指定的摄像头设备（通过OpenCV）
-        2. 设置摄像头分辨率
-        3. 读取单帧图像
+        1. 连接到指定的RealSense D435i设备（通过序列号）
+        2. 配置彩色流和深度流
+        3. 读取单帧彩色图像
         4. 自动保存图像到文件
-        5. 关闭摄像头并释放资源
+        5. 停止pipeline并释放资源
     
     资源管理策略:
-        - 采用"打开-使用-关闭"模式
-        - 每次capture()调用都会打开和关闭摄像头
+        - 采用"启动-使用-停止"模式
+        - 每次capture()调用都会启动和停止pipeline
         - 这样做可以避免资源竞争（特别是多个进程访问摄像头）
         - 缺点是速度较慢，但对于间断拍照来说足够了
     
     摄像头配置:
-        device: 摄像头设备号（例如4对应/dev/video4）
+        device_sn: RealSense设备序列号（默认"233722074381"）
         width: 图像宽度（像素）
         height: 图像高度（像素）
+        fps: 帧率（RealSense建议15fps以确保稳定性）
     
     使用例子:
         reader = CameraReader()
@@ -67,39 +71,50 @@ class CameraReader:
         reader.capture_and_save("photo.jpg")  # 直接拍照并保存
     """
 
-    def __init__(self, device: int = None, width: int = None, height: int = None):
+    def __init__(
+        self,
+        device_sn: str = None,
+        width: int = None,
+        height: int = None,
+        fps: int = None
+    ):
         """
-        初始化摄像头读取器
+        初始化RealSense摄像头读取器
         
         参数:
-            device: 摄像头设备号（例如4表示/dev/video4）
-                   如果为None，使用config.CAMERA_DEVICE配置
+            device_sn: RealSense设备序列号
+                      如果为None，使用默认值"233722074381"（G1头顶D435i）
             width: 图像宽度（像素）
                   如果为None，使用config.CAMERA_WIDTH配置（默认640）
             height: 图像高度（像素）
                    如果为None，使用config.CAMERA_HEIGHT配置（默认480）
+            fps: 帧率（每秒帧数）
+                如果为None，使用15fps（RealSense推荐值）
         
         例子:
             # 使用默认配置
             reader = CameraReader()
             
             # 自定义配置
-            reader = CameraReader(device=4, width=1280, height=720)
+            reader = CameraReader(device_sn="233722074381", width=640, height=480, fps=15)
         """
-        self.device = device or config.CAMERA_DEVICE
+        self.device_sn = device_sn or "233722074381"  # G1头顶D435i序列号
         self.width = width or config.CAMERA_WIDTH
         self.height = height or config.CAMERA_HEIGHT
+        self.fps = fps or 15  # RealSense建议使用15fps以确保所有设备兼容
 
     def capture(self, save_path: Optional[str] = None) -> Optional[tuple]:
         """
-        从摄像头捕获单帧图像
+        从RealSense D435i捕获单帧彩色图像
         
         工作流程:
-            1. 打开指定的摄像头设备
-            2. 设置摄像头分辨率（width x height）
-            3. 读取一帧图像
-            4. 保存图像到文件（如果提供路径）
-            5. 关闭摄像头（finally块确保总是关闭）
+            1. 创建RealSense pipeline和config
+            2. 配置设备序列号和流参数
+            3. 启动pipeline
+            4. 等待并获取帧（最多重试10次）
+            5. 提取彩色图像
+            6. 保存图像到文件（如果提供路径）
+            7. 停止pipeline（finally块确保总是执行）
         
         参数:
             save_path: 图像保存路径
@@ -108,13 +123,13 @@ class CameraReader:
         
         返回:
             成功: 返回元组 (image_array, save_path)
-                 image_array: numpy数组格式的图像（可用于进一步处理）
+                 image_array: numpy数组格式的BGR彩色图像
                  save_path: 图像保存的文件路径
             失败: 返回None（会记录错误日志）
         
         错误情况:
-            - 摄像头无法打开: 记录错误并返回None
-            - 读取帧失败: 记录错误并返回None
+            - pipeline启动失败: 记录错误并返回None
+            - 获取帧失败（重试10次后）: 记录错误并返回None
             - 保存图像失败: 记录错误并返回None
         
         例子:
@@ -127,27 +142,58 @@ class CameraReader:
                 print("拍照失败")
         
         重要说明:
-            - finally块确保摄像头资源总是被正确释放
+            - finally块确保pipeline总是被正确停止
             - 这防止了摄像头被长期占用导致的冲突问题
         """
-        logger.debug(f"Opening camera /dev/video{self.device}...")
+        logger.debug(f"Starting RealSense pipeline (SN: {self.device_sn})...")
 
-        cap = cv2.VideoCapture(self.device)
-
-        if not cap.isOpened():
-            logger.error(f"Cannot open camera /dev/video{self.device}")
-            return None
+        pipeline = rs.pipeline()
+        rs_config = rs.config()
 
         try:
-            # Set resolution
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+            # 配置设备和流
+            rs_config.enable_device(self.device_sn)
+            rs_config.enable_stream(
+                rs.stream.color, 
+                self.width, 
+                self.height, 
+                rs.format.bgr8, 
+                self.fps
+            )
+            rs_config.enable_stream(
+                rs.stream.depth, 
+                self.width, 
+                self.height, 
+                rs.format.z16, 
+                self.fps
+            )
 
-            # Read frame
-            ret, frame = cap.read()
+            # 启动pipeline
+            profile = pipeline.start(rs_config)
+            logger.debug("RealSense pipeline started")
 
-            if not ret:
-                logger.error("Failed to capture frame from camera")
+            # 等待设备稳定
+            time.sleep(0.5)
+
+            # 尝试获取帧（最多重试10次）
+            frame = None
+            for attempt in range(10):
+                try:
+                    frames = pipeline.wait_for_frames(timeout_ms=5000)
+                    color_frame = frames.get_color_frame()
+
+                    if color_frame:
+                        # 转换为numpy数组
+                        frame = np.asanyarray(color_frame.get_data())
+                        logger.debug(f"Got frame on attempt {attempt + 1}")
+                        break
+                    else:
+                        logger.debug(f"No color frame on attempt {attempt + 1}, retrying...")
+                except Exception as e:
+                    logger.debug(f"Frame acquisition error on attempt {attempt + 1}: {e}")
+
+            if frame is None:
+                logger.error("Failed to capture frame from RealSense after 10 attempts")
                 return None
 
             # Determine save path
@@ -168,13 +214,16 @@ class CameraReader:
                 return None
 
         except Exception as e:
-            logger.error(f"Camera capture error: {e}")
+            logger.error(f"RealSense camera capture error: {e}")
             return None
 
         finally:
-            # CRITICAL: Always release the camera resource
-            cap.release()
-            logger.debug(f"Camera /dev/video{self.device} released")
+            # CRITICAL: Always stop the pipeline
+            try:
+                pipeline.stop()
+                logger.debug("RealSense pipeline stopped")
+            except Exception as e:
+                logger.debug(f"Error stopping pipeline: {e}")
 
     def capture_and_save(self, filename: str = None) -> Optional[str]:
         """
