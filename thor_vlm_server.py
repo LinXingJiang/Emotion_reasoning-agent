@@ -2,6 +2,7 @@
 Thor VLM 推理服务器 - 基于Qwen2.5-VL-3B-Instruct
 功能: 接收G1发送的图像和文本，进行VLM推理，返回响应
 模型: Qwen2.5-VL-3B-Instruct (人物分析、情感识别)
+通信: HTTP/REST API (Flask)
 """
 
 import json
@@ -14,9 +15,7 @@ import io
 import re
 from typing import Optional
 from PIL import Image
-
-from unitree_sdk2py.core.channel import ChannelFactoryInitialize, ChannelSubscriber, ChannelPublisher
-from unitree_sdk2py.idl.std_msgs.msg.dds_._String_ import String_
+from flask import Flask, request, jsonify
 
 from transformers import Qwen2_5_VLForConditionalGeneration, AutoProcessor
 from qwen_vl_utils import process_vision_info
@@ -33,9 +32,9 @@ logger = logging.getLogger(__name__)
 # ============================================================
 # 配置参数
 # ============================================================
-NETWORK_INTERFACE = "eth0"  # Thor的网络接口，根据实际情况修改
-RECV_TOPIC = "rt/thor_request"   # 接收G1请求的话题
-SEND_TOPIC = "rt/thor_response"  # 发送响应的话题
+# HTTP服务器配置
+HOST = "0.0.0.0"  # 监听所有网络接口
+PORT = 5000       # 服务端口
 
 # Qwen2.5-VL 模型配置
 MODEL_PATH = "/home/bryce/models/Qwen2.5-VL-3B-Instruct"
@@ -418,162 +417,148 @@ def gender_text(gender: str) -> str:
 
 
 # ============================================================
-# Thor服务器主类
+# Flask 应用和全局VLM模型
 # ============================================================
-class ThorVLMServer:
-    """Thor VLM推理服务器"""
+app = Flask(__name__)
+vlm_model = None  # 全局模型实例，启动时初始化
+
+
+# ============================================================
+# HTTP API 路由
+# ============================================================
+@app.route('/infer', methods=['POST'])
+def infer():
+    """
+    VLM推理API端点
     
-    def __init__(self, network_interface: str):
-        self.network_interface = network_interface
-        self.vlm_model = QwenVLMModel()
-        self.subscriber: Optional[ChannelSubscriber] = None
-        self.publisher: Optional[ChannelPublisher] = None
+    请求格式 (JSON):
+        {
+            "text": "用户说的话",
+            "image_base64": "base64编码的图像",
+            "request_id": "可选的请求ID",
+            "timestamp": 可选的时间戳
+        }
     
-    def initialize(self) -> bool:
-        """初始化ROS2通信"""
-        try:
-            logger.info("=" * 60)
-            logger.info("🖥️  Thor VLM服务器 - 正在初始化")
-            logger.info("=" * 60)
-            
-            # 初始化ROS2 DDS
-            logger.info(f"📡 初始化ROS2 DDS，网络接口: {self.network_interface}")
-            ChannelFactoryInitialize(0, self.network_interface)
-            
-            # 创建订阅者（接收G1的请求）
-            logger.info(f"📥 订阅话题: {RECV_TOPIC}")
-            self.subscriber = ChannelSubscriber(RECV_TOPIC, String_)
-            self.subscriber.Init(self._on_request)
-            
-            # 创建发布者（发送响应给G1）
-            logger.info(f"📤 创建发布者: {SEND_TOPIC}")
-            self.publisher = ChannelPublisher(SEND_TOPIC, String_)
-            self.publisher.Init()
-            
-            logger.info("=" * 60)
-            logger.info("✅ Thor VLM服务器初始化成功！")
-            logger.info("=" * 60)
-            return True
-            
-        except Exception as e:
-            logger.error(f"❌ 初始化失败: {e}", exc_info=True)
-            return False
-    
-    def _on_request(self, msg: String_) -> None:
-        """
-        处理G1发来的推理请求
-        """
-        try:
-            # 解析JSON数据
-            raw_data = msg.data if isinstance(msg.data, str) else msg.data()
-            data = json.loads(raw_data)
-            
-            text = data.get("text", data.get("asr_text", ""))
-            image_b64 = data.get("image_base64", "")
-            request_id = data.get("request_id", "unknown")
-            timestamp = data.get("timestamp", 0)
-            
-            logger.info("=" * 60)
-            logger.info(f"📨 收到请求 (ID: {request_id[:8]}...)")
-            logger.info(f"📝 文本: '{text}'")
-            logger.info(f"⏱️  时间戳: {timestamp}")
-            
-            # 解码图像
-            image = None
-            if image_b64:
-                try:
-                    img_data = base64.b64decode(image_b64)
-                    nparr = np.frombuffer(img_data, np.uint8)
-                    image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-                    logger.info(f"📷 图像解码成功: {image.shape}")
-                except Exception as e:
-                    logger.warning(f"⚠️ 图像解码失败: {e}")
-                    # 使用空白图像
-                    image = np.zeros((IMAGE_HEIGHT, IMAGE_WIDTH, 3), dtype=np.uint8)
-            else:
-                logger.warning("⚠️ 未收到图像，使用空白图像")
+    响应格式 (JSON):
+        {
+            "status": "success",
+            "text": "机器人回复",
+            "action": "wave",
+            "action_type": "gesture",
+            "emotion": "happy",
+            "confidence": 0.95,
+            "request_id": "请求ID",
+            "analysis": {...}
+        }
+    """
+    try:
+        # 解析请求数据
+        data = request.get_json()
+        if not data:
+            return jsonify({
+                "status": "error",
+                "error": "Invalid JSON",
+                "text": "请求格式错误"
+            }), 400
+        
+        text = data.get("text", data.get("asr_text", ""))
+        image_b64 = data.get("image_base64", "")
+        request_id = data.get("request_id", "unknown")
+        timestamp = data.get("timestamp", 0)
+        
+        logger.info("=" * 60)
+        logger.info(f"📨 收到推理请求 (ID: {request_id[:8] if len(request_id) > 8 else request_id}...)")
+        logger.info(f"📝 文本: '{text}'")
+        logger.info(f"⏱️  时间戳: {timestamp}")
+        
+        # 解码图像
+        image = None
+        if image_b64:
+            try:
+                img_data = base64.b64decode(image_b64)
+                nparr = np.frombuffer(img_data, np.uint8)
+                image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+                logger.info(f"📷 图像解码成功: {image.shape}")
+            except Exception as e:
+                logger.warning(f"⚠️ 图像解码失败: {e}")
                 image = np.zeros((IMAGE_HEIGHT, IMAGE_WIDTH, 3), dtype=np.uint8)
-            
-            # VLM推理
-            result = self.vlm_model.inference(image, text)
-            
-            # 构建响应
-            response = {
-                "status": "success",
-                "text": result["response_text"],
-                "action": result["action"],
-                "action_type": result["action_type"],
-                "emotion": result["emotion"],
-                "confidence": result["confidence"],
-                "request_id": request_id,
-                "analysis": result.get("analysis", {})
-            }
-            
-            # 发送响应
-            self._send_response(response)
-            logger.info(f"✅ 响应已发送 (ID: {request_id[:8]}...)")
-            logger.info("=" * 60)
-            
-        except json.JSONDecodeError as e:
-            logger.error(f"❌ JSON解析失败: {e}")
-            self._send_error_response("json_parse_error", request_id="unknown")
-        except Exception as e:
-            logger.error(f"❌ 请求处理失败: {e}", exc_info=True)
-            self._send_error_response(
-                str(e),
-                request_id=data.get("request_id", "unknown") if 'data' in locals() else "unknown"
-            )
-    
-    def _send_response(self, response: dict) -> None:
-        """发送响应给G1"""
-        try:
-            msg = String_()
-            msg.data = json.dumps(response, ensure_ascii=False)
-            self.publisher.Write(msg)
-            logger.debug(f"📡 发送响应: {json.dumps(response, ensure_ascii=False)[:200]}...")
-        except Exception as e:
-            logger.error(f"❌ 发送响应失败: {e}")
-    
-    def _send_error_response(self, error_msg: str, request_id: str) -> None:
-        """发送错误响应"""
+        else:
+            logger.warning("⚠️ 未收到图像，使用空白图像")
+            image = np.zeros((IMAGE_HEIGHT, IMAGE_WIDTH, 3), dtype=np.uint8)
+        
+        # VLM推理
+        result = vlm_model.inference(image, text)
+        
+        # 构建响应
         response = {
-            "status": "error",
-            "error": error_msg,
-            "text": "抱歉，处理请求时出现错误。",
+            "status": "success",
+            "text": result["response_text"],
+            "action": result["action"],
+            "action_type": result["action_type"],
+            "emotion": result["emotion"],
+            "confidence": result["confidence"],
             "request_id": request_id,
+            "analysis": result.get("analysis", {})
+        }
+        
+        logger.info(f"✅ 推理完成 (ID: {request_id[:8] if len(request_id) > 8 else request_id}...)")
+        logger.info("=" * 60)
+        
+        return jsonify(response), 200
+        
+    except Exception as e:
+        logger.error(f"❌ 推理失败: {e}", exc_info=True)
+        return jsonify({
+            "status": "error",
+            "error": str(e),
+            "text": "抱歉，处理请求时出现错误。",
             "action": "shake_head",
             "action_type": "gesture",
             "confidence": 0.0
-        }
-        self._send_response(response)
+        }), 500
+
+
+@app.route('/health', methods=['GET'])
+def health():
+    """健康检查端点"""
+    return jsonify({
+        "status": "healthy",
+        "model_loaded": vlm_model is not None,
+        "model_path": MODEL_PATH
+    }), 200
+
+
+# ============================================================
+# Thor服务器主类
+# ============================================================
+class ThorVLMServer:
+    """Thor VLM HTTP推理服务器"""
     
-    def run(self):
-        """运行服务器（保持运行状态）"""
+    def __init__(self):
+        self.vlm_model = QwenVLMModel()
+    
+    def run(self, host: str = HOST, port: int = PORT, debug: bool = False):
+        """
+        启动HTTP服务器
+        
+        参数:
+            host: 监听地址 (默认 0.0.0.0 - 所有接口)
+            port: 监听端口 (默认 5000)
+            debug: 是否开启调试模式
+        """
+        global vlm_model
+        vlm_model = self.vlm_model
+        
         logger.info("=" * 60)
-        logger.info("🚀 Thor VLM服务器 - 运行中")
-        logger.info("🎯 等待G1请求...")
+        logger.info("🚀 Thor VLM HTTP服务器 - 启动中")
+        logger.info("=" * 60)
+        logger.info(f"📡 监听地址: {host}:{port}")
+        logger.info(f"🔗 推理端点: POST http://{host}:{port}/infer")
+        logger.info(f"💚 健康检查: GET http://{host}:{port}/health")
         logger.info("⌨️  按 Ctrl+C 停止服务器")
         logger.info("=" * 60)
         
-        try:
-            import time
-            while True:
-                time.sleep(0.1)  # 主循环，ROS2回调在后台线程处理
-        except KeyboardInterrupt:
-            logger.info("\n⏹️  收到停止信号 (Ctrl+C)")
-            self.stop()
-    
-    def stop(self):
-        """停止服务器"""
-        logger.info("=" * 60)
-        logger.info("🛑 正在停止 Thor VLM服务器")
-        logger.info("=" * 60)
-        # 清理资源
-        if self.subscriber:
-            self.subscriber = None
-        if self.publisher:
-            self.publisher = None
-        logger.info("✅ Thor VLM服务器已停止")
+        app.run(host=host, port=port, debug=debug, threaded=True)
 
 
 # ============================================================
@@ -583,28 +568,36 @@ def main():
     import argparse
     
     parser = argparse.ArgumentParser(
-        description="Thor VLM推理服务器 (基于Qwen2.5-VL-3B-Instruct)",
+        description="Thor VLM HTTP推理服务器 (基于Qwen2.5-VL-3B-Instruct)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
-  python thor_vlm_server.py eth0
-  python thor_vlm_server.py wlan0 --debug
+  python thor_vlm_server.py
+  python thor_vlm_server.py --host 0.0.0.0 --port 5000
+  python thor_vlm_server.py --debug
 
 注意:
   - 确保Qwen2.5-VL模型路径正确: {MODEL_PATH}
-  - 确保与G1机器人在同一网络
+  - 确保G1机器人可以访问此服务器的IP和端口
   - 推荐使用GPU加速 (CUDA)
         """.format(MODEL_PATH=MODEL_PATH)
     )
     
     parser.add_argument(
-        "network_interface",
-        help="网络接口名称 (例如: eth0, wlan0)",
+        "--host",
+        default=HOST,
+        help=f"监听地址 (默认: {HOST})",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=PORT,
+        help=f"监听端口 (默认: {PORT})",
     )
     parser.add_argument(
         "--debug",
         action="store_true",
-        help="开启调试日志",
+        help="开启调试模式",
     )
     
     args = parser.parse_args()
@@ -626,15 +619,9 @@ def main():
     logger.info("=" * 60)
     
     # 创建并运行服务器
-    server = ThorVLMServer(args.network_interface)
-    
-    if not server.initialize():
-        logger.error("❌ 初始化失败")
-        return 1
-    
-    server.run()
-    return 0
+    server = ThorVLMServer()
+    server.run(host=args.host, port=args.port, debug=args.debug)
 
 
 if __name__ == "__main__":
-    exit(main())
+    main()

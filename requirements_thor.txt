@@ -1,0 +1,22 @@
+# Thor VLM Server - Python Dependencies
+# 仅在Jetson Thor上安装
+# Install with: pip install -r requirements_thor.txt
+
+# Web Framework
+Flask>=3.0.0
+Werkzeug>=3.0.0
+
+# Deep Learning Framework
+torch>=2.1.0
+transformers>=4.35.0
+
+# Qwen VLM Utilities
+qwen-vl-utils>=0.0.1
+
+# Image Processing
+Pillow>=10.1.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+
+# Base64 encoding (built-in, listed for reference)
+# base64 (Python standard library)

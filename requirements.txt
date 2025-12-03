@@ -1,6 +1,9 @@
 # G1 Robot Controller - Python Dependencies
 # Install with: pip install -r requirements.txt
 
+# ============================================================
+# G1机器人依赖
+# ============================================================
 # Core Unitree SDK for G1 robot communication
 unitree-sdk2py>=1.0.0
 
@@ -12,6 +15,26 @@ pyrealsense2>=2.50.0
 
 # Numerical Computing (required by RealSense)
 numpy>=1.24.0
+
+# HTTP Client (for Thor communication)
+requests>=2.31.0
+
+# ============================================================
+# Thor VLM服务器依赖（仅在Jetson Thor上安装）
+# ============================================================
+# Web Framework (Thor HTTP server)
+# Flask>=3.0.0
+# Werkzeug>=3.0.0
+
+# Deep Learning
+# torch>=2.1.0
+# transformers>=4.35.0
+
+# Qwen VLM Utils
+# qwen-vl-utils>=0.0.1
+
+# PIL Image Processing
+# Pillow>=10.1.0
 
 # Development Dependencies (optional)
 # pytest>=7.4.0           # For unit testing

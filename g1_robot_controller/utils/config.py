@@ -97,7 +97,7 @@ TTS_TIMEOUT = float(os.getenv("G1_TTS_TIMEOUT", "10.0"))
 ASR_TOPIC = os.getenv("G1_ASR_TOPIC", "rt/audio_msg")
 
 # ============================================================
-# Thor（Jetson推理服务器）通信配置
+# Thor（Jetson推理服务器）HTTP通信配置
 # ============================================================
 # Thor服务器的网络地址（IP地址）
 # 这是Jetson设备运行的推理服务器地址
@@ -106,13 +106,12 @@ THOR_HOST = os.getenv("G1_THOR_HOST", "192.168.1.100")
 # Thor服务器的网络端口
 THOR_PORT = int(os.getenv("G1_THOR_PORT", "5000"))
 
-# 发送给Thor的请求话题
-# 本地G1通过这个话题发送ASR文本和图像给Thor
-THOR_SEND_TOPIC = os.getenv("G1_THOR_SEND_TOPIC", "rt/thor_request")
+# Thor服务器完整URL
+# HTTP POST端点: http://THOR_HOST:THOR_PORT/infer
+THOR_URL = os.getenv("G1_THOR_URL", f"http://{THOR_HOST}:{THOR_PORT}")
 
-# 接收Thor响应的话题
-# Thor通过这个话题返回推理结果（动作、语音等）
-THOR_RECV_TOPIC = os.getenv("G1_THOR_RECV_TOPIC", "rt/thor_response")
+# HTTP请求超时时间(秒)
+THOR_TIMEOUT = float(os.getenv("G1_THOR_TIMEOUT", "30.0"))
 
 # ============================================================
 # 系统级配置
