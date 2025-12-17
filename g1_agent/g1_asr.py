@@ -18,7 +18,7 @@ def main():
     sub = ChannelSubscriber("rt/audio_msg", String_)
     sub.Init(callback)
 
-    print("🚀 ASR 监听中... 对机器人说话吧！")
+    print(" ASR 监听中... 说话吧！")
     while True:
         pass
 
